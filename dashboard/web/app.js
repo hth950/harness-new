@@ -154,6 +154,121 @@
     }[c]));
   }
 
+  // ---- Phase 1.5: consensus progress + open taste-decisions ----
+  // Read-only display of the run's consensus.json / taste-decisions.json (frozen
+  // shapes from the shared contract). The dashboard NEVER mutates them; it only
+  // reflects the Codex<->Claude disagreement and consensus the human must see.
+  // All dynamic content is HTML-escaped. Endpoints 404 when the artifacts are
+  // absent (a thin Phase-1 run), in which case the panels stay hidden.
+
+  function renderConsensus(c) {
+    const panel = $('consensus-panel');
+    // Hide the panel if there is no consensus artifact or it is malformed.
+    if (!c || typeof c !== 'object' || !Array.isArray(c.rounds)) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = 'block';
+    const rounds = c.rounds;
+    const latest = rounds.length ? rounds[rounds.length - 1] : null;
+    $('consensus-round').textContent = latest && latest.n != null ? String(latest.n) : '—';
+    $('consensus-max').textContent = c.max_rounds != null ? String(c.max_rounds) : '—';
+
+    const verdicts = $('consensus-verdicts');
+    verdicts.innerHTML = '';
+    if (latest) {
+      const a = latest.architect || {};
+      const cr = latest.critic || {};
+      if (a.verdict != null) {
+        verdicts.innerHTML +=
+          `<span class="vchip v-${esc(a.verdict)}">architect: ${esc(a.verdict)}</span>`;
+      }
+      if (cr.verdict != null) {
+        verdicts.innerHTML +=
+          `<span class="vchip v-${esc(cr.verdict)}">critic: ${esc(cr.verdict)}</span>`;
+      }
+    }
+
+    const reached = $('consensus-reached');
+    if (c.escalated === true) {
+      reached.className = 'reached-escalated';
+      reached.textContent = 'ESCALATED — handed to human';
+    } else if (c.reached === true) {
+      reached.className = 'reached-yes';
+      reached.textContent = 'consensus reached';
+    } else {
+      reached.className = 'reached-no';
+      reached.textContent = 'in progress…';
+    }
+  }
+
+  function renderTasteDecisions(td) {
+    const panel = $('taste-panel');
+    const cards = $('taste-cards');
+    const list = td && typeof td === 'object' && Array.isArray(td.decisions) ? td.decisions : null;
+    // Surface OPEN decisions (the human-facing work); resolved ones are not the
+    // point of the panel. Hide entirely when there are none.
+    const open = list ? list.filter((d) => d && d.status !== 'resolved') : [];
+    if (open.length === 0) {
+      panel.style.display = 'none';
+      cards.innerHTML = '';
+      return;
+    }
+    panel.style.display = 'block';
+    cards.innerHTML = '';
+    for (const d of open) {
+      const blocking = d.blocking === true;
+      const statusCls = blocking ? 'badge-blocking' : 'badge-open';
+      const statusTxt = blocking ? 'blocking' : 'open';
+      const card = document.createElement('div');
+      card.className = 'taste-card' + (blocking ? ' blocking' : '');
+      card.innerHTML = `
+        <div class="taste-head">
+          <span class="taste-topic">${esc(d.topic ?? d.id ?? 'decision')}</span>
+          <span class="badge ${statusCls}">${esc(statusTxt)}</span>
+        </div>
+        <div class="taste-positions">
+          <div class="pos claude"><div class="who">Claude</div>${esc(d.claude_position ?? '—')}</div>
+          <div class="pos codex"><div class="who">Codex</div>${esc(d.codex_position ?? '—')}</div>
+        </div>
+        <div class="taste-rec"><span class="label">recommendation:</span> ${esc(d.recommendation ?? '—')}</div>
+      `;
+      cards.appendChild(card);
+    }
+  }
+
+  async function refreshConsensus() {
+    try {
+      const r = await fetch('/api/consensus');
+      if (r.status === 200) {
+        renderConsensus(await r.json());
+      } else {
+        // 404 (absent) or any non-200: no consensus artifact -> hide the panel.
+        renderConsensus(null);
+      }
+    } catch {
+      renderConsensus(null);
+    }
+  }
+
+  async function refreshTasteDecisions() {
+    try {
+      const r = await fetch('/api/taste-decisions');
+      if (r.status === 200) {
+        renderTasteDecisions(await r.json());
+      } else {
+        renderTasteDecisions(null);
+      }
+    } catch {
+      renderTasteDecisions(null);
+    }
+  }
+
+  function refreshKickoffState() {
+    refreshConsensus();
+    refreshTasteDecisions();
+  }
+
   // ---- Document viewer (goal-doc.md / plan.md) ----
   async function openDoc(relPath) {
     try {
@@ -204,6 +319,10 @@
     if (msg.type === 'snapshot') applySnapshot(msg.snapshot);
     else if (msg.type === 'event') applyEvent(msg.event);
     render();
+    // The consensus/taste-decisions artifacts are not part of the event stream,
+    // so re-read them on any live activity (the kickoff loop writes them as it
+    // advances). A periodic refresh below covers quiescent periods.
+    refreshKickoffState();
   }
 
   // ---- Transport: WS primary, SSE fallback ----
@@ -260,4 +379,9 @@
 
   render();
   connect();
+  // Initial load of the kickoff-consensus artifacts, then a periodic refresh as a
+  // liveness safety net (covers the case where the event stream is quiet but the
+  // kickoff loop is still advancing consensus / opening taste-decisions).
+  refreshKickoffState();
+  setInterval(refreshKickoffState, 3000);
 })();

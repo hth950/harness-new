@@ -91,6 +91,41 @@
       #docview pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
       #docview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
       #docclose { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 16px; }
+
+      /* Phase 1.5: consensus + taste-decisions panel */
+      .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 20px 0 8px; }
+      #consensus-panel { display: none; }
+      .consensus-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+      .consensus-line .verdicts { display: flex; gap: 6px; flex-wrap: wrap; }
+      .vchip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+      .v-approved, .v-okay { background: #3fb95033; color: var(--green); }
+      .v-changes_requested, .v-reject { background: #d2992233; color: var(--yellow); }
+      .reached-yes { color: var(--green); font-weight: 600; }
+      .reached-no { color: var(--muted); }
+      .reached-escalated { color: var(--red); font-weight: 600; }
+
+      #taste-panel { display: none; }
+      .taste-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+      }
+      .taste-card.blocking { border-left: 3px solid var(--red); }
+      .taste-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+      .taste-topic { font-weight: 600; }
+      .taste-positions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+      @media (max-width: 640px) { .taste-positions { grid-template-columns: 1fr; } }
+      .pos { background: #0e1116; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+      .pos .who { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 3px; }
+      .pos.claude .who { color: var(--accent); }
+      .pos.codex .who { color: var(--yellow); }
+      .taste-rec { font-size: 13px; }
+      .taste-rec .label { color: var(--muted); }
+      .badge-blocking { background: #f8514933; color: var(--red); }
+      .badge-open { background: #d2992233; color: var(--yellow); }
+      .badge-resolved { background: #3fb95033; color: var(--green); }
     </style>
   </head>
   <body>
@@ -128,6 +163,22 @@
           <tr><td colspan="8" class="empty">waiting for agents…</td></tr>
         </tbody>
       </table>
+
+      <div id="consensus-panel">
+        <div class="section-title">Kickoff Consensus</div>
+        <div class="card">
+          <div class="consensus-line">
+            <span>Round <strong id="consensus-round">—</strong> / <span id="consensus-max">—</span></span>
+            <span class="verdicts" id="consensus-verdicts"></span>
+            <span id="consensus-reached" class="reached-no">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="taste-panel">
+        <div class="section-title">Open Taste-Decisions (Codex ⇄ Claude)</div>
+        <div id="taste-cards"></div>
+      </div>
 
       <div id="docview">
         <div class="head">

@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, existsSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 
 import {
   JsonlTailer,
@@ -440,6 +441,178 @@ test('HTTP /api/file does not follow a symlink that escapes the run dir (HIGH-S)
 });
 
 // ===========================================================================
+// (Phase 1.5) /api/consensus + /api/taste-decisions serve the run's fixtures.
+// Uses the FROZEN shared shapes (consensus.json / taste-decisions.json).
+// ===========================================================================
+test('Phase1.5: /api/consensus and /api/taste-decisions serve run fixtures', async (t) => {
+  const { base, runDir } = mkRunDir();
+
+  const consensus = {
+    v: 1,
+    run_id: 'r-test',
+    max_rounds: 5,
+    rounds: [
+      {
+        n: 1,
+        planner_draft_ref: 'agents/planner/plan.md',
+        architect: { verdict: 'changes_requested', notes: 'tighten the scope' },
+        critic: { verdict: 'reject', notes: 'missing data-accumulation section' },
+      },
+      {
+        n: 2,
+        planner_draft_ref: 'agents/planner/plan.md',
+        architect: { verdict: 'approved', notes: 'looks good' },
+        critic: { verdict: 'okay', notes: 'acceptable' },
+      },
+    ],
+    reached: true,
+    escalated: false,
+  };
+  const taste = {
+    v: 1,
+    run_id: 'r-test',
+    decisions: [
+      {
+        id: 'td-1',
+        topic: 'storage backend',
+        claude_position: 'use sqlite',
+        codex_position: 'use plain jsonl files',
+        recommendation: 'jsonl for portability',
+        blocking: true,
+        status: 'open',
+        resolution: null,
+      },
+      {
+        id: 'td-2',
+        topic: 'already settled',
+        claude_position: 'a',
+        codex_position: 'b',
+        recommendation: 'a',
+        blocking: false,
+        status: 'resolved',
+        resolution: { decision: 'a', note: 'agreed' },
+      },
+    ],
+  };
+  writeFileSync(join(runDir, 'consensus.json'), JSON.stringify(consensus), 'utf8');
+  writeFileSync(join(runDir, 'taste-decisions.json'), JSON.stringify(taste), 'utf8');
+
+  const { dash, port } = await startServer(runDir);
+  t.after(async () => {
+    await dash.close();
+    cleanup(base);
+  });
+
+  const c = await httpGet(port, '/api/consensus');
+  assert.equal(c.status, 200, 'consensus served');
+  const cj = JSON.parse(c.body);
+  assert.equal(cj.v, 1);
+  assert.equal(cj.max_rounds, 5);
+  assert.equal(cj.reached, true);
+  assert.equal(cj.escalated, false);
+  assert.equal(cj.rounds.length, 2);
+  assert.equal(cj.rounds[1].architect.verdict, 'approved');
+  assert.equal(cj.rounds[1].critic.verdict, 'okay');
+
+  const td = await httpGet(port, '/api/taste-decisions');
+  assert.equal(td.status, 200, 'taste-decisions served');
+  const tdj = JSON.parse(td.body);
+  assert.equal(tdj.v, 1);
+  assert.equal(tdj.decisions.length, 2);
+  assert.equal(tdj.decisions[0].topic, 'storage backend');
+  assert.equal(tdj.decisions[0].blocking, true);
+  assert.equal(tdj.decisions[0].status, 'open');
+});
+
+// ===========================================================================
+// (Phase 1.5) Absent artifacts -> 404, never a crash (backward compatible with
+// thin Phase-1 runs that have no consensus / taste-decisions).
+// ===========================================================================
+test('Phase1.5: /api/consensus + /api/taste-decisions return 404 when absent (no crash)', async (t) => {
+  const { base, runDir } = mkRunDir();
+  // No consensus.json / taste-decisions.json written at all.
+  const { dash, port } = await startServer(runDir);
+  t.after(async () => {
+    await dash.close();
+    cleanup(base);
+  });
+
+  const c = await httpGet(port, '/api/consensus');
+  assert.equal(c.status, 404, 'absent consensus -> 404');
+  const td = await httpGet(port, '/api/taste-decisions');
+  assert.equal(td.status, 404, 'absent taste-decisions -> 404');
+
+  // The server is still alive and serving after the 404s (no crash).
+  const info = await httpGet(port, '/api/info');
+  assert.equal(info.status, 200, 'server still alive after 404s');
+});
+
+// ===========================================================================
+// (Phase 1.5) Malformed JSON on disk -> 500, never a crash, never streamed.
+// ===========================================================================
+test('Phase1.5: malformed consensus.json -> 500 (no crash)', async (t) => {
+  const { base, runDir } = mkRunDir();
+  writeFileSync(join(runDir, 'consensus.json'), '{ this is : not json,,, ', 'utf8');
+  const { dash, port } = await startServer(runDir);
+  t.after(async () => {
+    await dash.close();
+    cleanup(base);
+  });
+
+  const c = await httpGet(port, '/api/consensus');
+  assert.equal(c.status, 500, 'malformed json -> 500');
+  assert.doesNotMatch(c.body, /this is/, 'must not stream the raw malformed body');
+  // Still alive.
+  const info = await httpGet(port, '/api/info');
+  assert.equal(info.status, 200);
+});
+
+// ===========================================================================
+// (Phase 1.5) The new endpoints are path-traversal / symlink safe like
+// /api/file: a consensus.json / taste-decisions.json that is a SYMLINK pointing
+// OUTSIDE the run dir must NOT leak its target (403/404, never 200+secret).
+// ===========================================================================
+test('Phase1.5: /api/consensus does not follow a symlink escaping the run dir', async (t) => {
+  const { base, runDir } = mkRunDir();
+  const secret = join(base, 'outside-consensus-secret.txt');
+  writeFileSync(secret, 'TOP SECRET CONSENSUS TARGET', 'utf8');
+
+  // Replace consensus.json / taste-decisions.json with symlinks to the secret.
+  let symlinkSupported = true;
+  try {
+    symlinkSync(secret, join(runDir, 'consensus.json'));
+    symlinkSync(secret, join(runDir, 'taste-decisions.json'));
+  } catch {
+    symlinkSupported = false; // e.g. Windows without privilege; skip assertion.
+  }
+
+  const { dash, port } = await startServer(runDir);
+  t.after(async () => {
+    await dash.close();
+    cleanup(base);
+  });
+
+  if (symlinkSupported) {
+    for (const ep of ['/api/consensus', '/api/taste-decisions']) {
+      const res = await httpGet(port, ep);
+      assert.notEqual(res.status, 200, `${ep} symlink must not return 200, got ${res.status}`);
+      assert.ok(
+        res.status === 403 || res.status === 404,
+        `${ep} symlink escape must be refused (403/404), got ${res.status}`
+      );
+      assert.doesNotMatch(
+        res.body,
+        /TOP SECRET CONSENSUS TARGET/,
+        `${ep} must not leak the out-of-run secret`
+      );
+    }
+    // Sanity: the symlink really exists and points outside the run dir.
+    assert.ok(existsSync(join(runDir, 'consensus.json')));
+    assert.ok(!secret.startsWith(runDir));
+  }
+});
+
+// ===========================================================================
 // (4) Server binds 127.0.0.1 ONLY (loopback). Not reachable on a non-loopback
 //     local address, and the bound address family is loopback.
 // ===========================================================================
@@ -575,4 +748,84 @@ test('tailer caps an unbounded unterminated partial and recovers on a later newl
   } finally {
     cleanup(base);
   }
+});
+
+// ===========================================================================
+// (LOW-3 regression) /api/file statSync(realSafe) is wrapped in try/catch (like
+// serveRunJson) so an unlink RACE between the containment guard's realpathSync and
+// the subsequent statSync does NOT throw an uncaught exception in the request
+// handler. An uncaught throw there escalates to a PROCESS-LEVEL uncaughtException
+// (verified: Node's http server does not swallow it) — i.e. the whole dashboard
+// process crashes. The race window is too small to hit from same-process JS (the
+// guard's realpathSync and the handler's statSync see the same FS within one
+// synchronous turn), so we drive a SEPARATE child process that unlinks/recreates
+// the target at OS speed while we hammer /api/file. With the fix, no
+// uncaughtException ever fires and the server stays alive (responses are
+// 200/404/500 — 500 only from the separate, pre-existing post-stat read window,
+// never a crash). With the bug reinjected (unwrapped statSync), this test catches
+// a process-level uncaughtException 'ENOENT'.
+// ===========================================================================
+test('HTTP /api/file survives an unlink race on stat without crashing the process (LOW-3)', async (t) => {
+  const { base, runDir } = mkRunDir();
+  const target = join(runDir, 'flaky.md');
+  writeFileSync(target, '# flaky\n', 'utf8');
+
+  // Capture any process-level uncaughtException the handler would otherwise crash
+  // on. We temporarily REPLACE node:test's listeners so a reinjected bug fails THIS
+  // test (instead of aborting the whole runner), then restore them in t.after.
+  const prior = process.listeners('uncaughtException');
+  for (const l of prior) process.removeListener('uncaughtException', l);
+  const handlerCrashes = [];
+  const onUncaught = (err) => handlerCrashes.push(err);
+  process.on('uncaughtException', onUncaught);
+
+  const { dash, port } = await startServer(runDir);
+
+  // Child process that churns the file (delete + recreate) at full OS speed — this
+  // genuinely interleaves with the server's event loop, exercising the race.
+  const unlinkerSrc = join(base, 'unlinker.mjs');
+  writeFileSync(
+    unlinkerSrc,
+    "import { rmSync, writeFileSync } from 'node:fs';\n" +
+    'const t = process.argv[2];\n' +
+    'for (;;) { try { rmSync(t, { force: true }); } catch {} try { writeFileSync(t, "x"); } catch {} }\n',
+    'utf8'
+  );
+  const child = spawn(process.execPath, [unlinkerSrc, target], { stdio: 'ignore' });
+
+  t.after(async () => {
+    try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    try { await dash.close(); } catch { /* ignore */ }
+    process.removeListener('uncaughtException', onUncaught);
+    for (const l of prior) process.on('uncaughtException', l);
+    cleanup(base);
+  });
+
+  const statuses = new Set();
+  for (let i = 0; i < 1500 && handlerCrashes.length === 0; i++) {
+    const r = await httpGet(port, '/api/file?path=' + encodeURIComponent('flaky.md'))
+      .catch((e) => ({ status: 'ERR:' + (e.code || e.message) }));
+    statuses.add(r.status);
+  }
+
+  // The hard contract (LOW-3): the unlink race must NEVER escalate to a
+  // process-level uncaughtException (a dashboard-wide crash).
+  assert.equal(
+    handlerCrashes.length,
+    0,
+    `unlink race must not crash the handler; saw uncaughtException(s): ${handlerCrashes.map((e) => e.code || e.message).join(', ')}`
+  );
+
+  // Every response is a normal HTTP status (200 served / 404 raced-away / 500
+  // post-stat read window) — never a dropped connection from an uncaught throw.
+  for (const s of statuses) {
+    assert.ok(
+      s === 200 || s === 404 || s === 500,
+      `every /api/file response must be a normal status (200/404/500), saw ${s}`
+    );
+  }
+
+  // The server is still alive and serving after the race storm (no crash).
+  const info = await httpGet(port, '/api/info');
+  assert.equal(info.status, 200, 'server still alive after the unlink-race storm');
 });

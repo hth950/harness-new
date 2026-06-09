@@ -205,6 +205,62 @@ function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
   res.end(text);
 }
 
+// Serve a named JSON artifact (e.g. consensus.json, taste-decisions.json) from
+// the TOP of the run dir, read-only. Reuses the EXACT containment guards used by
+// /api/file (lexical safeResolveInside + symlink-aware realPathInside) so a
+// symlinked artifact can never read outside the run dir. Returns:
+//   404 — file absent (a thin Phase-1 run simply has none) — never a crash.
+//   403 — the resolved path escapes the run dir (symlink/traversal).
+//   500 — unreadable / unparsable JSON on disk.
+//   200 — the parsed JSON, re-serialized (so a half-written file is rejected,
+//         not streamed to the client mid-write).
+// `fileName` is a fixed, hard-coded basename (no client input), but it still
+// passes through the guards as defense-in-depth.
+function serveRunJson(res, runDir, fileName) {
+  const safe = safeResolveInside(runDir, fileName);
+  if (!safe) {
+    sendText(res, 403, 'forbidden: path escapes run directory');
+    return;
+  }
+  const guarded = realPathInside(runDir, safe);
+  if (!guarded.ok) {
+    if (guarded.reason === 'escape') {
+      sendText(res, 403, 'forbidden: path escapes run directory');
+    } else {
+      sendText(res, 404, 'not found');
+    }
+    return;
+  }
+  const real = guarded.real;
+  let stat;
+  try {
+    stat = statSync(real);
+  } catch {
+    sendText(res, 404, 'not found');
+    return;
+  }
+  if (!stat.isFile()) {
+    sendText(res, 404, 'not found');
+    return;
+  }
+  let raw;
+  try {
+    raw = readFileSync(real, 'utf8');
+  } catch {
+    sendText(res, 500, 'read error');
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Malformed / mid-write JSON on disk: do not crash, do not stream garbage.
+    sendText(res, 500, 'malformed json');
+    return;
+  }
+  sendJson(res, 200, parsed);
+}
+
 // ---------------------------------------------------------------------------
 // Server factory.
 // ---------------------------------------------------------------------------
@@ -291,6 +347,25 @@ export function createDashboardServer(config) {
       return;
     }
 
+    // --- API: consensus progress (Phase 1.5) ---
+    // GET /api/consensus -> the run's consensus.json (read-only). 404 when the
+    // file is absent (a thin Phase-1 kickoff has none), never crashes. Served
+    // through the SAME containment guard as /api/file so a symlinked
+    // consensus.json can never read outside the run dir.
+    if (path === '/api/consensus') {
+      serveRunJson(res, runDir, 'consensus.json');
+      return;
+    }
+
+    // --- API: open taste-decisions (Phase 1.5) ---
+    // GET /api/taste-decisions -> the run's taste-decisions.json (read-only).
+    // 404 when absent (backward compatible with Phase 1 runs that have none),
+    // never crashes. Same containment guard as /api/file.
+    if (path === '/api/taste-decisions') {
+      serveRunJson(res, runDir, 'taste-decisions.json');
+      return;
+    }
+
     // --- API: read-only file fetch with path-traversal guard ---
     // GET /api/file?path=<relative-to-run-dir>
     // Only goal-doc.md and agents/<id>/plan.md style docs are intended, but the
@@ -315,7 +390,16 @@ export function createDashboardServer(config) {
         return;
       }
       const realSafe = guarded.real;
-      if (!statSync(realSafe).isFile()) {
+      // LOW-3: wrap statSync in try/catch (matching serveRunJson) so an unlink
+      // race between the containment guard and the stat -> 404, never a crash.
+      let fileStat;
+      try {
+        fileStat = statSync(realSafe);
+      } catch {
+        sendText(res, 404, 'not found');
+        return;
+      }
+      if (!fileStat.isFile()) {
         sendText(res, 404, 'not found');
         return;
       }
