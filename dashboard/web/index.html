@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness Dashboard</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --border: #2d333b;
+        --fg: #e6edf3;
+        --muted: #8b949e;
+        --accent: #58a6ff;
+        --green: #3fb950;
+        --yellow: #d29922;
+        --red: #f85149;
+        --blue: #58a6ff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 20px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: #21262d;
+        border: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+      .dot.live { background: var(--green); }
+      .dot.dead { background: var(--red); }
+      main { padding: 16px 20px; }
+      .meta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 14px;
+        min-width: 120px;
+      }
+      .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+      .card .value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+      table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+      th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+      th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: #1b2129; }
+      tr:last-child td { border-bottom: none; }
+      tr.flash { animation: flash 0.6s ease-out; }
+      @keyframes flash { from { background: #1f6feb33; } to { background: transparent; } }
+      .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+      .st-running { background: #1f6feb33; color: var(--blue); }
+      .st-waiting_review { background: #d2992233; color: var(--yellow); }
+      .st-blocked { background: #d2992233; color: var(--yellow); }
+      .st-completed { background: #3fb95033; color: var(--green); }
+      .st-failed { background: #f8514933; color: var(--red); }
+      .st-stalled { background: #f8514933; color: var(--red); }
+      .st-unknown { background: #8b949e22; color: var(--muted); }
+      .progress-wrap { background: #21262d; border-radius: 4px; height: 8px; width: 90px; overflow: hidden; }
+      .progress-bar { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      a.docbtn { color: var(--accent); text-decoration: none; font-size: 12px; }
+      a.docbtn:hover { text-decoration: underline; }
+      .stale { color: var(--red); }
+      .empty { color: var(--muted); padding: 24px; text-align: center; }
+      #docview {
+        margin-top: 16px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px;
+        display: none;
+      }
+      #docview pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      #docview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+      #docclose { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 16px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Harness Dashboard</h1>
+      <span class="pill"><span id="conn-dot" class="dot"></span><span id="conn-text">connecting…</span></span>
+      <span class="pill">channel: <span id="channel" class="mono">—</span></span>
+      <span class="pill">run: <span id="run-id" class="mono">—</span></span>
+      <span class="pill">phase: <span id="run-phase" class="mono">—</span></span>
+    </header>
+    <main>
+      <div class="meta-row">
+        <div class="card"><div class="label">Phase</div><div id="m-phase" class="value">—</div></div>
+        <div class="card"><div class="label">Agents</div><div id="m-agents" class="value">0</div></div>
+        <div class="card"><div class="label">Claude $</div><div id="m-claude" class="value">—</div></div>
+        <div class="card"><div class="label">Codex $</div><div id="m-codex" class="value">—</div></div>
+        <div class="card"><div class="label">Spawns</div><div id="m-spawns" class="value">—</div></div>
+        <div class="card"><div class="label">Ceiling $</div><div id="m-ceiling" class="value">—</div></div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Agent ID</th>
+            <th>Role</th>
+            <th>Phase</th>
+            <th>Progress</th>
+            <th>Status</th>
+            <th>Round</th>
+            <th>Last Heartbeat</th>
+            <th>Docs</th>
+          </tr>
+        </thead>
+        <tbody id="agent-rows">
+          <tr><td colspan="8" class="empty">waiting for agents…</td></tr>
+        </tbody>
+      </table>
+
+      <div id="docview">
+        <div class="head">
+          <strong id="doctitle" class="mono"></strong>
+          <button id="docclose" title="close">✕</button>
+        </div>
+        <pre id="doccontent"></pre>
+      </div>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

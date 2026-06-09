@@ -1,0 +1,22 @@
+{
+  "name": "harness-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only localhost live dashboard for the self-driving harness. Separate process; tails the file-format contract (events.jsonl + snapshot.json) — no shared code with the harness lib.",
+  "main": "server/index.mjs",
+  "bin": {
+    "harness-dashboard": "server/index.mjs"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

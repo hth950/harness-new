@@ -237,6 +237,31 @@ test('(5) parseCodexTokens handles commas and costFromTokens > 0', () => {
 });
 
 // ===========================================================================
+// (5b) parseCodexTokens bounds absurd magnitudes (LOW-C regression).
+// A 39-digit "tokens used" value is finite under Number but would inflate
+// cost_usd and corrupt the budget ledger. It MUST return null (not a huge
+// number). Normal values still parse; comma handling preserved.
+// ===========================================================================
+test('(5b) parseCodexTokens rejects absurd magnitudes but keeps normal values (LOW-C)', () => {
+  // 39-digit value -> Number.isFinite is true, but it is NOT a safe integer.
+  const absurd = '1'.repeat(39);
+  assert.equal(
+    parseCodexTokens(`tokens used ${absurd}\n`),
+    null,
+    'a 39-digit token count must be rejected as null, not a huge finite number'
+  );
+  // Comma-grouped absurd magnitude is likewise rejected.
+  assert.equal(parseCodexTokens('tokens used 123,456,789,012,345,678,901\n'), null);
+  // Just over the 1e9 token ceiling -> rejected.
+  assert.equal(parseCodexTokens('tokens used 1000000001\n'), null);
+  // Boundary: exactly 1e9 is still accepted.
+  assert.equal(parseCodexTokens('tokens used 1000000000\n'), 1_000_000_000);
+  // Normal values still parse, including comma handling and last-cumulative-total.
+  assert.equal(parseCodexTokens('tokens used 29,078\n'), 29078);
+  assert.equal(parseCodexTokens('tokens used 100\ntokens used 2,500\n'), 2500);
+});
+
+// ===========================================================================
 // (6) git checkpoint + computeDiff + validateTouched  [T0.6]
 // ===========================================================================
 test('(6) checkpoint + computeDiff + validateTouched on a temp repo', () => {
