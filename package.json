@@ -1,0 +1,10 @@
+{
+  "name": "self-driving-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-driving development harness — Phase 0 foundation (event contract, run namespacing, budget, git isolation/checkpoints).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

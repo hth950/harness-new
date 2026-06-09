@@ -1,0 +1,101 @@
+{
+  "$schema": "harness-event-schema/v1",
+  "version": 1,
+  "description": "Frozen v1 event schema for the self-driving harness. One JSON object per line in agents/<id>/events.jsonl. The only integration seam between the harness and the dashboard. See plan §4.",
+  "required": ["v", "t", "run_id", "agent_id", "event_type"],
+  "fields": {
+    "v": { "type": "integer", "const": 1, "doc": "Schema version. Frozen at 1." },
+    "t": { "type": "integer", "doc": "Event timestamp, epoch milliseconds." },
+    "run_id": { "type": "string", "doc": "Correlates the event to a run (see run-layout.mjs mintRunId)." },
+    "agent_id": { "type": "string", "doc": "Owning agent id (single writer per events.jsonl)." },
+    "agent_role": { "type": "string", "enum_ref": "AGENT_ROLES", "nullable": true },
+    "engine": { "type": "string", "enum_ref": "ENGINES", "nullable": true },
+    "event_type": { "type": "string", "enum_ref": "EVENT_TYPES" },
+    "phase": { "type": "string", "enum_ref": "PHASES", "nullable": true },
+    "progress_pct": { "type": "number", "min": 0, "max": 100, "nullable": true },
+    "plan_doc_ref": { "type": "string", "nullable": true },
+    "status": { "type": "string", "enum_ref": "STATUSES", "nullable": true },
+    "round": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "n": { "type": "integer", "doc": "Round number (1-based)." },
+        "state": { "type": "string", "enum_ref": "ROUND_STATES" },
+        "patch_ref": { "type": "string", "nullable": true }
+      }
+    },
+    "review": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "target_agent": { "type": "string", "nullable": true },
+        "verdict": { "type": "string", "enum": ["approved", "requesting_changes", null], "nullable": true },
+        "round": { "type": "integer", "nullable": true }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+        "claude_cost_usd": { "type": "number", "nullable": true },
+        "codex_cost_usd": { "type": "number", "nullable": true },
+        "spawns": { "type": "integer", "nullable": true }
+      }
+    },
+    "msg": { "type": "string", "nullable": true },
+    "error": { "type": ["string", "object"], "nullable": true }
+  },
+  "enums": {
+    "EVENT_TYPES": [
+      "agent_start",
+      "plan_uploaded",
+      "phase_transition",
+      "heartbeat",
+      "progress_update",
+      "round_state",
+      "review_request",
+      "review_verdict",
+      "agent_complete",
+      "agent_failed",
+      "session_ended",
+      "budget_alert",
+      "stall_alert"
+    ],
+    "STATUSES": [
+      "running",
+      "waiting_review",
+      "blocked",
+      "completed",
+      "failed",
+      "stalled",
+      "unknown"
+    ],
+    "PHASES": [
+      "kickoff",
+      "plan",
+      "implement",
+      "review",
+      "revise",
+      "done"
+    ],
+    "ROUND_STATES": [
+      "started",
+      "completed_with_patch",
+      "reviewed",
+      "merged",
+      "abandoned",
+      "unknown_after_death"
+    ],
+    "AGENT_ROLES": [
+      "executor",
+      "codex-worker",
+      "reviewer",
+      "monitor",
+      "orchestrator"
+    ],
+    "ENGINES": [
+      "claude",
+      "codex"
+    ]
+  }
+}

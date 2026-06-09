@@ -1,1 +1,8 @@
+# Harness runtime state (regenerated per run / per session)
 .omc/runs/
+.omc/state/
+.omc/prompts/
+# Review scratch artifacts (keep the plan doc, drop the scratch)
+.omc/plans/.codex-review-*
+# Node
+node_modules/
