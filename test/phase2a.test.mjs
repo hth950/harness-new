@@ -84,6 +84,10 @@ test('(1) happy path: new file + tracked edit -> diff -> allowlist -> merged, ar
       codexRunner: codexRunnerHappy({ tokens: 2000 }),
       reviewRunner: async () => ({ verdict: VERDICTS.APPROVED, notes: 'lgtm' }),
       maxRounds: 2,
+      // 'api' billing meters codex tokens -> usd (the path this test asserts on).
+      // The DEFAULT 'subscription' mode is flat -> codex cost 0 (the user's real
+      // ChatGPT-account Codex), covered by the pricing suite (P4).
+      codexBillingMode: 'api',
     });
 
     assert.equal(result.merged, true, 'should merge on APPROVED');
@@ -119,9 +123,9 @@ test('(1) happy path: new file + tracked edit -> diff -> allowlist -> merged, ar
       'must traverse started->completed_with_patch->reviewed->merged',
     );
 
-    // codex cost recorded (tokens -> usd).
+    // codex cost recorded (tokens -> usd) under 'api' billing mode.
     const budget = loadBudget(rd);
-    assert.ok(budget.codex_cost_usd > 0, 'codex cost must be recorded from tokens');
+    assert.ok(budget.codex_cost_usd > 0, 'codex cost must be recorded from tokens (api billing)');
 
     // The integration branch actually contains the merged files.
     const intFiles = git(repo, 'ls-files');
