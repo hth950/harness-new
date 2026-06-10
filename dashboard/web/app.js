@@ -80,9 +80,9 @@
     const ageMs = Date.now() - t;
     const hhmmss = d.toLocaleTimeString();
     if (ageMs > 5 * 60 * 1000) {
-      return `<span class="stale">${hhmmss} (stalled)</span>`;
+      return `<span class="stale">${hhmmss} (지연)</span>`;
     }
-    if (ageMs > 30 * 1000) return `${hhmmss} (${Math.round(ageMs / 1000)}s)`;
+    if (ageMs > 30 * 1000) return `${hhmmss} (${Math.round(ageMs / 1000)}초)`;
     return hhmmss;
   }
 
@@ -113,7 +113,7 @@
 
     const tbody = $('agent-rows');
     if (ids.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty">waiting for agents…</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">에이전트 대기 중…</td></tr>';
       return;
     }
 
@@ -131,17 +131,17 @@
       const planRef = v.plan_doc_ref || `agents/${id}/plan.md`;
       tr.innerHTML = `
         <td class="mono">${esc(id)}</td>
-        <td>${esc(v.role || '—')}</td>
-        <td>${esc(v.phase || '—')}</td>
+        <td>${v.role != null ? esc(displayLabel('role', v.role)) : '—'}</td>
+        <td>${v.phase != null ? esc(displayLabel('phase', v.phase)) : '—'}</td>
         <td>
           <div class="progress-wrap"><div class="progress-bar" style="width:${pct}%"></div></div>
           <span class="mono">${v.progress_pct != null ? pct + '%' : '—'}</span>
         </td>
-        <td><span class="badge st-${esc(status)}">${esc(status)}</span></td>
+        <td><span class="badge st-${esc(status)}">${esc(displayLabel('status', status))}</span></td>
         <td class="mono">${esc(roundText(v.round))}</td>
         <td class="mono">${fmtTime(v.last_heartbeat_t)}</td>
         <td>
-          <a class="docbtn" href="#" data-doc="${esc(planRef)}">plan</a>
+          <a class="docbtn" href="#" data-doc="${esc(planRef)}">계획</a>
         </td>
       `;
       tbody.appendChild(tr);
@@ -152,6 +152,51 @@
     return String(s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
+  }
+
+  // ---- Korean display labels ----
+  // English enum KEYS stay in code/logic (data attributes, CSS class suffixes,
+  // merge semantics). Only the rendered TEXT is mapped to Korean here. Unmapped
+  // values FALL BACK to the raw value so unknown enums still display.
+  const LABELS = {
+    status: {
+      running: '실행 중',
+      waiting_review: '리뷰 대기',
+      blocked: '차단됨',
+      completed: '완료',
+      failed: '실패',
+      stalled: '지연',
+      unknown: '알 수 없음',
+    },
+    role: {
+      orchestrator: '오케스트레이터',
+      executor: '실행자',
+      'codex-worker': 'Codex 워커',
+      reviewer: '리뷰어',
+      monitor: '모니터',
+    },
+    phase: {
+      kickoff: '킥오프',
+      plan: '계획',
+      implement: '구현',
+      review: '리뷰',
+      revise: '수정',
+      done: '완료',
+    },
+    verdict: {
+      approved: '승인',
+      changes_requested: '변경 요청',
+      okay: '통과',
+      reject: '거부',
+    },
+  };
+
+  function displayLabel(category, value) {
+    const table = LABELS[category];
+    if (table && value != null && Object.prototype.hasOwnProperty.call(table, value)) {
+      return table[value];
+    }
+    return value; // fall back to the raw value for unmapped enums
   }
 
   // ---- Phase 1.5: consensus progress + open taste-decisions ----
@@ -181,24 +226,24 @@
       const cr = latest.critic || {};
       if (a.verdict != null) {
         verdicts.innerHTML +=
-          `<span class="vchip v-${esc(a.verdict)}">architect: ${esc(a.verdict)}</span>`;
+          `<span class="vchip v-${esc(a.verdict)}">아키텍트: ${esc(displayLabel('verdict', a.verdict))}</span>`;
       }
       if (cr.verdict != null) {
         verdicts.innerHTML +=
-          `<span class="vchip v-${esc(cr.verdict)}">critic: ${esc(cr.verdict)}</span>`;
+          `<span class="vchip v-${esc(cr.verdict)}">크리틱: ${esc(displayLabel('verdict', cr.verdict))}</span>`;
       }
     }
 
     const reached = $('consensus-reached');
     if (c.escalated === true) {
       reached.className = 'reached-escalated';
-      reached.textContent = 'ESCALATED — handed to human';
+      reached.textContent = '사람 에스컬레이션(미합의)';
     } else if (c.reached === true) {
       reached.className = 'reached-yes';
-      reached.textContent = 'consensus reached';
+      reached.textContent = '합의 완료';
     } else {
       reached.className = 'reached-no';
-      reached.textContent = 'in progress…';
+      reached.textContent = '진행 중…';
     }
   }
 
@@ -219,7 +264,7 @@
     for (const d of open) {
       const blocking = d.blocking === true;
       const statusCls = blocking ? 'badge-blocking' : 'badge-open';
-      const statusTxt = blocking ? 'blocking' : 'open';
+      const statusTxt = blocking ? '차단' : '열림';
       const card = document.createElement('div');
       card.className = 'taste-card' + (blocking ? ' blocking' : '');
       card.innerHTML = `
@@ -231,7 +276,7 @@
           <div class="pos claude"><div class="who">Claude</div>${esc(d.claude_position ?? '—')}</div>
           <div class="pos codex"><div class="who">Codex</div>${esc(d.codex_position ?? '—')}</div>
         </div>
-        <div class="taste-rec"><span class="label">recommendation:</span> ${esc(d.recommendation ?? '—')}</div>
+        <div class="taste-rec"><span class="label">권고:</span> ${esc(d.recommendation ?? '—')}</div>
       `;
       cards.appendChild(card);
     }
@@ -299,7 +344,7 @@
   const goalBtn = document.createElement('a');
   goalBtn.className = 'pill';
   goalBtn.href = '#';
-  goalBtn.textContent = 'goal-doc';
+  goalBtn.textContent = '목표문서';
   goalBtn.style.cursor = 'pointer';
   goalBtn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -344,7 +389,7 @@
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.onopen = () => setConn(true, 'live (WS)');
+    ws.onopen = () => setConn(true, '실시간 연결됨 (WS)');
     ws.onmessage = (e) => {
       try {
         onMessage(JSON.parse(e.data));
@@ -353,7 +398,7 @@
       }
     };
     ws.onclose = () => {
-      setConn(false, 'disconnected — retrying…');
+      setConn(false, '재연결 중…');
       setTimeout(connectWs, 1000);
     };
     ws.onerror = () => {
@@ -363,7 +408,7 @@
 
   function connectSse() {
     const es = new EventSource('/api/stream');
-    es.onopen = () => setConn(true, 'live (SSE)');
+    es.onopen = () => setConn(true, '실시간 연결됨 (SSE)');
     es.onmessage = (e) => {
       try {
         onMessage(JSON.parse(e.data));
@@ -372,7 +417,7 @@
       }
     };
     es.onerror = () => {
-      setConn(false, 'disconnected — retrying…');
+      setConn(false, '재연결 중…');
       // EventSource auto-reconnects; reflect status only.
     };
   }

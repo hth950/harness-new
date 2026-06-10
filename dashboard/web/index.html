@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Harness Dashboard</title>
+    <title>하네스 대시보드</title>
     <style>
       :root {
         --bg: #0e1116;
@@ -130,45 +130,45 @@
   </head>
   <body>
     <header>
-      <h1>Harness Dashboard</h1>
-      <span class="pill"><span id="conn-dot" class="dot"></span><span id="conn-text">connecting…</span></span>
-      <span class="pill">channel: <span id="channel" class="mono">—</span></span>
-      <span class="pill">run: <span id="run-id" class="mono">—</span></span>
-      <span class="pill">phase: <span id="run-phase" class="mono">—</span></span>
+      <h1>하네스 대시보드</h1>
+      <span class="pill"><span id="conn-dot" class="dot"></span><span id="conn-text">연결 중…</span></span>
+      <span class="pill">채널: <span id="channel" class="mono">—</span></span>
+      <span class="pill">실행: <span id="run-id" class="mono">—</span></span>
+      <span class="pill">단계: <span id="run-phase" class="mono">—</span></span>
     </header>
     <main>
       <div class="meta-row">
-        <div class="card"><div class="label">Phase</div><div id="m-phase" class="value">—</div></div>
-        <div class="card"><div class="label">Agents</div><div id="m-agents" class="value">0</div></div>
-        <div class="card"><div class="label">Claude $</div><div id="m-claude" class="value">—</div></div>
-        <div class="card"><div class="label">Codex $</div><div id="m-codex" class="value">—</div></div>
-        <div class="card"><div class="label">Spawns</div><div id="m-spawns" class="value">—</div></div>
-        <div class="card"><div class="label">Ceiling $</div><div id="m-ceiling" class="value">—</div></div>
+        <div class="card"><div class="label">단계</div><div id="m-phase" class="value">—</div></div>
+        <div class="card"><div class="label">에이전트</div><div id="m-agents" class="value">0</div></div>
+        <div class="card"><div class="label">Claude 비용($)</div><div id="m-claude" class="value">—</div></div>
+        <div class="card"><div class="label">Codex 비용($)</div><div id="m-codex" class="value">—</div></div>
+        <div class="card"><div class="label">생성 수</div><div id="m-spawns" class="value">—</div></div>
+        <div class="card"><div class="label">예산 상한($)</div><div id="m-ceiling" class="value">—</div></div>
       </div>
 
       <table>
         <thead>
           <tr>
-            <th>Agent ID</th>
-            <th>Role</th>
-            <th>Phase</th>
-            <th>Progress</th>
-            <th>Status</th>
-            <th>Round</th>
-            <th>Last Heartbeat</th>
-            <th>Docs</th>
+            <th>에이전트 ID</th>
+            <th>역할</th>
+            <th>단계</th>
+            <th>진행도</th>
+            <th>상태</th>
+            <th>라운드</th>
+            <th>마지막 신호</th>
+            <th>문서</th>
           </tr>
         </thead>
         <tbody id="agent-rows">
-          <tr><td colspan="8" class="empty">waiting for agents…</td></tr>
+          <tr><td colspan="8" class="empty">에이전트 대기 중…</td></tr>
         </tbody>
       </table>
 
       <div id="consensus-panel">
-        <div class="section-title">Kickoff Consensus</div>
+        <div class="section-title">킥오프 합의</div>
         <div class="card">
           <div class="consensus-line">
-            <span>Round <strong id="consensus-round">—</strong> / <span id="consensus-max">—</span></span>
+            <span>라운드 <strong id="consensus-round">—</strong> / <span id="consensus-max">—</span></span>
             <span class="verdicts" id="consensus-verdicts"></span>
             <span id="consensus-reached" class="reached-no">—</span>
           </div>
@@ -176,7 +176,7 @@
       </div>
 
       <div id="taste-panel">
-        <div class="section-title">Open Taste-Decisions (Codex ⇄ Claude)</div>
+        <div class="section-title">미해소 이견 (CODEX ⇄ CLAUDE)</div>
         <div id="taste-cards"></div>
       </div>
 
