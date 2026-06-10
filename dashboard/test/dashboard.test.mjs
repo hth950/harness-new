@@ -11,9 +11,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, existsSync, symlinkSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, existsSync, symlinkSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 
@@ -828,4 +829,195 @@ test('HTTP /api/file survives an unlink race on stat without crashing the proces
   // The server is still alive and serving after the race storm (no crash).
   const info = await httpGet(port, '/api/info');
   assert.equal(info.status, 200, 'server still alive after the unlink-race storm');
+});
+
+// ===========================================================================
+// (Phase 2b T2.7) A review_verdict event (review:{target_agent,verdict,round})
+// is emitted UNDER the reviewer agent but pertains to review.target_agent. The
+// synthesized snapshot must fold it into the reviewer's reviews map keyed by the
+// TARGET agent, with the LATEST round winning; cross-agent attribution then
+// surfaces the target agent's latest verdict on the target's own row. The plan
+// link for the target (agents/<target>/plan.md) must resolve through the guarded
+// /api/file endpoint, while a run-absolute plan_doc_ref does NOT (so the SPA must
+// normalize it to the run-relative form before linking).
+// ===========================================================================
+
+// Cross-agent attribution mirror of the SPA's latestVerdictFor(): scan every
+// agent's reviews map for entries keyed by the target and keep the highest round.
+function snapshotVerdictFor(snapAgents, targetId) {
+  let best = null;
+  for (const id of Object.keys(snapAgents)) {
+    const reviews = snapAgents[id] && snapAgents[id].reviews;
+    if (!reviews || typeof reviews !== 'object') continue;
+    const r = reviews[targetId];
+    if (!r || r.verdict == null) continue;
+    const rn = typeof r.round === 'number' ? r.round : -1;
+    if (best === null || rn >= best._round) {
+      best = { verdict: r.verdict, round: r.round ?? null, _round: rn };
+    }
+  }
+  return best ? { verdict: best.verdict, round: best.round } : null;
+}
+
+test('T2.7: synthesized snapshot reflects an agent\'s latest cross-review verdict + plan link resolves', async (t) => {
+  const { base, runDir } = mkRunDir();
+
+  // The agent being reviewed (target). Give it a real plan.md so the link can be
+  // served through the guarded endpoint.
+  const targetDir = join(runDir, 'agents', 'worker-1');
+  mkdirSync(targetDir, { recursive: true });
+  writeFileSync(join(targetDir, 'plan.md'), '# worker-1 plan\nbuild feature X\n', 'utf8');
+
+  // The reviewer agent emits TWO review_verdict events about worker-1 in two
+  // rounds: round 1 requesting_changes, round 2 approved. The synthesized
+  // snapshot must reflect the LATEST round (approved), attributed to worker-1.
+  writeEventLine(runDir, 'reviewer-1', ev({
+    event_type: 'agent_start', agent_id: 'reviewer-1', agent_role: 'reviewer', t: 1,
+  }));
+  writeEventLine(runDir, 'reviewer-1', ev({
+    event_type: 'review_verdict', agent_id: 'reviewer-1', agent_role: 'reviewer',
+    review: { target_agent: 'worker-1', verdict: 'requesting_changes', round: 1 }, t: 2,
+  }));
+  writeEventLine(runDir, 'reviewer-1', ev({
+    event_type: 'review_verdict', agent_id: 'reviewer-1', agent_role: 'reviewer',
+    review: { target_agent: 'worker-1', verdict: 'approved', round: 2 }, t: 3,
+  }));
+  // worker-1's own stream (it never reviews itself; its reviews map stays empty).
+  writeEventLine(runDir, 'worker-1', ev({
+    event_type: 'agent_start', agent_id: 'worker-1', agent_role: 'executor',
+    phase: 'review', plan_doc_ref: '.omc/runs/r-test/agents/worker-1/plan.md', t: 4,
+  }));
+
+  const snap = mergeSnapshotFromEvents(runDir);
+
+  // The verdict is folded onto the REVIEWER's view, keyed by the TARGET agent.
+  assert.ok(snap.agents['reviewer-1'], 'reviewer agent present');
+  assert.ok(snap.agents['reviewer-1'].reviews['worker-1'], 'verdict keyed by target_agent on reviewer');
+  // Latest round wins (round 2 approved, not round 1 requesting_changes).
+  assert.equal(snap.agents['reviewer-1'].reviews['worker-1'].verdict, 'approved');
+  assert.equal(snap.agents['reviewer-1'].reviews['worker-1'].round, 2);
+
+  // worker-1's OWN reviews map is empty (it is the target, not a reviewer).
+  assert.deepEqual(snap.agents['worker-1'].reviews, {}, 'target agent reviews map stays empty');
+
+  // Cross-agent attribution (the SPA row state for worker-1) surfaces the LATEST
+  // verdict for worker-1, sourced from the reviewer's stream — not worker-1's own.
+  const rowVerdict = snapshotVerdictFor(snap.agents, 'worker-1');
+  assert.ok(rowVerdict, 'worker-1 row has an attributed verdict');
+  assert.equal(rowVerdict.verdict, 'approved', 'latest verdict attributed to target row');
+  assert.equal(rowVerdict.round, 2, 'latest round attributed to target row');
+  // The reviewer's own row has no verdict attributed to it.
+  assert.equal(snapshotVerdictFor(snap.agents, 'reviewer-1'), null, 'reviewer row has no self-verdict');
+
+  // The plan link for worker-1 resolves through the GUARDED /api/file endpoint.
+  // The SPA normalizes plan_doc_ref (run-absolute ".omc/runs/.../agents/worker-1/plan.md")
+  // to the run-relative "agents/worker-1/plan.md" the endpoint expects.
+  const { dash, port } = await startServer(runDir);
+  t.after(async () => {
+    await dash.close();
+    cleanup(base);
+  });
+
+  const okPlan = await httpGet(port, '/api/file?path=' + encodeURIComponent('agents/worker-1/plan.md'));
+  assert.equal(okPlan.status, 200, 'run-relative plan link served through guarded endpoint');
+  assert.match(okPlan.body, /build feature X/);
+
+  // The UN-normalized run-absolute ref is NOT served as-is: it escapes the run dir
+  // (the run dir is not literally ".omc/runs/r-test/..." under itself), proving the
+  // SPA MUST normalize to the run-relative form before linking.
+  const rawRef = await httpGet(port, '/api/file?path=' + encodeURIComponent('.omc/runs/r-test/agents/worker-1/plan.md'));
+  assert.notEqual(rawRef.status, 200, 'un-normalized run-absolute plan_doc_ref must not resolve to a served file');
+});
+
+// ===========================================================================
+// (LOW-TB) Dashboard tie-break determinism. latestVerdictFor (web/app.js) folds
+// every agent's reviews map keyed by the target and surfaces the LATEST verdict.
+// On an EQUAL round the OLD code let "last-in-key-order" win (non-deterministic).
+// The fix makes the equal-round tie-break deterministic AND safety-biased:
+//   (1) a CHANGES-requesting verdict beats an approval at the same round, then
+//   (2) a stable reviewer-id ordering breaks any remaining tie.
+//
+// We load the REAL latestVerdictFor out of web/app.js (extracting it + its two
+// helpers and binding a controllable `state`) so this test genuinely catches a
+// regression of the app.js logic — reinjecting the old `rn >= best._round`
+// last-wins code fails it.
+// ===========================================================================
+
+// Pull the named function/const source blocks out of the app.js IIFE and run them
+// in a sandbox with an injected `state`, exposing latestVerdictFor for the test.
+function loadLatestVerdictFor(stateAgents) {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'app.js'),
+    'utf8',
+  );
+  const slice = (startMarker, endMarker) => {
+    const a = src.indexOf(startMarker);
+    assert.ok(a >= 0, `app.js must contain ${JSON.stringify(startMarker)}`);
+    const b = src.indexOf(endMarker, a);
+    assert.ok(b >= 0, `app.js must contain ${JSON.stringify(endMarker)} after the marker`);
+    return src.slice(a, b + endMarker.length);
+  };
+  // The three contiguous source blocks we need (in file order).
+  const changesConst = slice('const CHANGES_VERDICTS', '};');
+  const isChanges = slice('function isChangesVerdict', '\n  }');
+  const latest = slice('function latestVerdictFor', '\n    return best ? { verdict: best.verdict, round: best.round } : null;\n  }');
+
+  const body = `
+    const state = { agents: __AGENTS__ };
+    ${changesConst}
+    ${isChanges}
+    ${latest}
+    return latestVerdictFor;
+  `;
+  // eslint-disable-next-line no-new-func
+  const make = new Function('__AGENTS__', body.replace('__AGENTS__', '__AGENTS__'));
+  return make(stateAgents);
+}
+
+test('LOW-TB: latestVerdictFor tie-break is deterministic + safety-biased', () => {
+  // Two reviewers (different ids) give DIFFERENT verdicts for the same target at
+  // the SAME round: one approved, one requesting_changes. The result must be the
+  // changes verdict regardless of object key order (safety bias), deterministically.
+  const verdictForOrder = (agents) => loadLatestVerdictFor(agents)('target-1');
+
+  // Order A: approver listed first, changer second.
+  const a = verdictForOrder({
+    'rev-approve': { reviews: { 'target-1': { verdict: 'approved', round: 2 } } },
+    'rev-changes': { reviews: { 'target-1': { verdict: 'requesting_changes', round: 2 } } },
+  });
+  // Order B: changer first, approver second (reversed key order).
+  const b = verdictForOrder({
+    'rev-changes': { reviews: { 'target-1': { verdict: 'requesting_changes', round: 2 } } },
+    'rev-approve': { reviews: { 'target-1': { verdict: 'approved', round: 2 } } },
+  });
+
+  assert.equal(a.verdict, 'requesting_changes', 'equal round: changes beats approved (order A)');
+  assert.equal(b.verdict, 'requesting_changes', 'equal round: changes beats approved (order B)');
+  assert.deepEqual(a, b, 'verdict is independent of agent key order (deterministic)');
+
+  // A higher round STILL wins outright (approval at round 3 over changes at round 2).
+  const higher = verdictForOrder({
+    'rev-changes': { reviews: { 'target-1': { verdict: 'requesting_changes', round: 2 } } },
+    'rev-approve': { reviews: { 'target-1': { verdict: 'approved', round: 3 } } },
+  });
+  assert.equal(higher.verdict, 'approved', 'a strictly higher round wins regardless of safety bias');
+  assert.equal(higher.round, 3);
+
+  // Same round, SAME verdict class across two reviewers: stable reviewer-id order
+  // (lexicographic) decides — deterministic, not last-in-key-order.
+  const tie = verdictForOrder({
+    'rev-b': { reviews: { 'target-1': { verdict: 'approved', round: 1 } } },
+    'rev-a': { reviews: { 'target-1': { verdict: 'approved', round: 1 } } },
+  });
+  assert.equal(tie.verdict, 'approved');
+  // (Both approved, so the verdict is identical either way; the determinism is the
+  // point — re-running with reversed key order yields the same object.)
+  const tieRev = verdictForOrder({
+    'rev-a': { reviews: { 'target-1': { verdict: 'approved', round: 1 } } },
+    'rev-b': { reviews: { 'target-1': { verdict: 'approved', round: 1 } } },
+  });
+  assert.deepEqual(tie, tieRev, 'same-class tie is order-independent');
+
+  // No reviews for the target -> null.
+  assert.equal(verdictForOrder({ 'rev-a': { reviews: {} } }), null, 'no verdict -> null');
 });

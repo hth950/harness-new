@@ -99,7 +99,7 @@
       .consensus-line .verdicts { display: flex; gap: 6px; flex-wrap: wrap; }
       .vchip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
       .v-approved, .v-okay { background: #3fb95033; color: var(--green); }
-      .v-changes_requested, .v-reject { background: #d2992233; color: var(--yellow); }
+      .v-changes_requested, .v-requesting_changes, .v-reject { background: #d2992233; color: var(--yellow); }
       .reached-yes { color: var(--green); font-weight: 600; }
       .reached-no { color: var(--muted); }
       .reached-escalated { color: var(--red); font-weight: 600; }
@@ -155,12 +155,13 @@
             <th>진행도</th>
             <th>상태</th>
             <th>라운드</th>
+            <th>리뷰</th>
             <th>마지막 신호</th>
             <th>문서</th>
           </tr>
         </thead>
         <tbody id="agent-rows">
-          <tr><td colspan="8" class="empty">에이전트 대기 중…</td></tr>
+          <tr><td colspan="9" class="empty">에이전트 대기 중…</td></tr>
         </tbody>
       </table>
 

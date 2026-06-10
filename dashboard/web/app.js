@@ -97,6 +97,82 @@
     return `${n} ${s}`.trim() || '—';
   }
 
+  // Verdicts that REQUEST CHANGES (block a merge). Used by the safety-biased
+  // tie-break below: on an equal round we surface a changes-requesting verdict
+  // over an approval so the row never displays "approved" while a peer still
+  // wants changes.
+  const CHANGES_VERDICTS = { requesting_changes: 1, changes_requested: 1, reject: 1 };
+  function isChangesVerdict(verdict) {
+    return Object.prototype.hasOwnProperty.call(CHANGES_VERDICTS, String(verdict));
+  }
+
+  // Cross-review verdict attribution: a review_verdict event is emitted UNDER the
+  // reviewer agent but its review.target_agent names the agent being reviewed
+  // (cross-review.mjs writeReview). The fold (applyEvent / mergeSnapshotFromEvents)
+  // stores it as reviews[target_agent] on the REVIEWER's view. To surface a verdict
+  // on the TARGET agent's own row we scan every agent's reviews map for entries
+  // keyed by targetId and keep the LATEST verdict (highest round).
+  //
+  // LOW-TB (deterministic, SAFETY-biased tie-break): a higher round always wins.
+  // On an EQUAL round the old code let "last-in-key-order" win (non-deterministic
+  // across browsers / map orderings). We now break an equal-round tie
+  // deterministically and conservatively:
+  //   1. prefer a CHANGES-requesting verdict over an approval (never show
+  //      "approved" while a peer at the same round requested changes), then
+  //   2. break any remaining tie by a STABLE reviewer-id ordering (lexicographic).
+  // Display-only — the merge gate is unaffected.
+  function latestVerdictFor(targetId) {
+    let best = null;
+    for (const id of Object.keys(state.agents)) {
+      const reviews = state.agents[id] && state.agents[id].reviews;
+      if (!reviews || typeof reviews !== 'object') continue;
+      const r = reviews[targetId];
+      if (!r || r.verdict == null) continue;
+      const rn = typeof r.round === 'number' ? r.round : -1;
+      const cand = { verdict: r.verdict, round: r.round ?? null, _round: rn, _reviewer: id };
+      if (best === null || cand._round > best._round) {
+        best = cand;
+        continue;
+      }
+      if (cand._round === best._round) {
+        // (1) safety bias: a changes verdict beats a non-changes verdict.
+        const candChanges = isChangesVerdict(cand.verdict);
+        const bestChanges = isChangesVerdict(best.verdict);
+        if (candChanges !== bestChanges) {
+          if (candChanges) best = cand;
+          continue;
+        }
+        // (2) stable reviewer-id ordering breaks any remaining tie deterministically.
+        if (cand._reviewer < best._reviewer) best = cand;
+      }
+    }
+    return best ? { verdict: best.verdict, round: best.round } : null;
+  }
+
+  // Build the run-RELATIVE plan path the guarded /api/file endpoint expects.
+  // plan_doc_ref (per §4) may be recorded as a run-absolute path such as
+  // ".omc/runs/<id>/agents/<id>/plan.md" or even an OS-absolute one; /api/file
+  // resolves its `path` arg RELATIVE to the run dir and 403s anything that
+  // escapes it. We therefore reduce any ref to its trailing "agents/<id>/..."
+  // segment when present, and otherwise fall back to the canonical per-agent
+  // location agents/<id>/plan.md. Leading "../" or absolute refs (which the
+  // endpoint would reject) collapse to the safe canonical form.
+  function planRefFor(agentId, ref) {
+    const fallback = `agents/${agentId}/plan.md`;
+    if (typeof ref !== 'string' || ref.length === 0) return fallback;
+    const norm = ref.replace(/\\/g, '/');
+    const idx = norm.indexOf('agents/');
+    if (idx >= 0) {
+      const rel = norm.slice(idx);
+      // Reject any residual traversal so the link always stays inside the run dir.
+      if (!rel.includes('..')) return rel;
+      return fallback;
+    }
+    // A plain relative ref with no traversal is usable as-is.
+    if (!norm.startsWith('/') && !norm.includes('..')) return norm;
+    return fallback;
+  }
+
   function render() {
     $('run-id').textContent = state.runId || '—';
     $('run-phase').textContent = state.phase || '—';
@@ -113,7 +189,7 @@
 
     const tbody = $('agent-rows');
     if (ids.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty">에이전트 대기 중…</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="empty">에이전트 대기 중…</td></tr>';
       return;
     }
 
@@ -128,7 +204,18 @@
       const pct = v.progress_pct != null ? Math.max(0, Math.min(100, v.progress_pct)) : 0;
       const status = v.status || 'unknown';
 
-      const planRef = v.plan_doc_ref || `agents/${id}/plan.md`;
+      // plan_doc_ref may be an absolute on-disk path (.omc/runs/<id>/agents/<id>/plan.md)
+      // or already run-relative. The /api/file endpoint resolves paths RELATIVE to the
+      // run dir, so normalize to the run-relative form (agents/<id>/plan.md) by taking
+      // the substring from the run-relative "agents/" segment when present; otherwise
+      // fall back to the canonical per-agent location.
+      const planRef = planRefFor(id, v.plan_doc_ref);
+      // Cross-review verdict for THIS agent (attributed via review.target_agent).
+      const verdict = latestVerdictFor(id);
+      const verdictHtml = verdict
+        ? `<span class="vchip v-${esc(verdict.verdict)}">${esc(displayLabel('verdict', verdict.verdict))}</span>` +
+          (verdict.round != null ? ` <span class="mono">R${esc(verdict.round)}</span>` : '')
+        : '—';
       tr.innerHTML = `
         <td class="mono">${esc(id)}</td>
         <td>${v.role != null ? esc(displayLabel('role', v.role)) : '—'}</td>
@@ -139,6 +226,7 @@
         </td>
         <td><span class="badge st-${esc(status)}">${esc(displayLabel('status', status))}</span></td>
         <td class="mono">${esc(roundText(v.round))}</td>
+        <td>${verdictHtml}</td>
         <td class="mono">${fmtTime(v.last_heartbeat_t)}</td>
         <td>
           <a class="docbtn" href="#" data-doc="${esc(planRef)}">계획</a>
@@ -185,6 +273,7 @@
     },
     verdict: {
       approved: '승인',
+      requesting_changes: '변경 요청',
       changes_requested: '변경 요청',
       okay: '통과',
       reject: '거부',
