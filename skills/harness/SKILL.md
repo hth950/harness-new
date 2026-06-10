@@ -57,9 +57,13 @@ produced them) and any blocking taste-decisions are resolved.
      against the allowlist, sends the scoped patch to the paired peer reviewer, and
      merges the branch ONLY on `approved` (else abandons). Same merge discipline as
      a Codex round — unreviewed/un-approved work is never merged.
-   - **Codex task** → run a real Codex round worker via `runCodexWorker` (Codex CLI
-     `codex exec --full-auto -C <worktree>`, **model PINNED** to
-     `DEFAULT_CODEX_MODEL`). Codex edits its own worktree; the orchestrator owns the
+   - **Codex task** → run a real Codex round worker via `runCodexWorker`, passing
+     `defaultLiveCodexRunner` (exported from `codex-round-runner.mjs`) as
+     `opts.codexRunner` — it shells the real Codex CLI
+     (`codex exec --full-auto -C <worktree>`, **model PINNED** to
+     `DEFAULT_CODEX_MODEL`, 1-hour timeout) to EDIT the worktree and parses the
+     trailing `tokens used N` for cost. The live runner is OPT-IN: unit tests inject
+     a mock, never the real CLI. Codex edits its own worktree; the orchestrator owns the
      `git diff` (never trusting Codex's text), validates touched-files against the
      allowlist, and the **paired peer reviewer** (from `pairRoundRobin`) reviews the
      scoped `round.patch`. Max 2 rounds; merge on `approved`, else abandon +
@@ -93,6 +97,19 @@ the runners are real Team Claude workers, the real Codex CLI, and a real reviewe
 
 ## Library surface (lib/, Node built-ins only)
 
+- `lib/harness-config.mjs` — `loadConfig(root, { env? })` resolves DEFAULTS <
+  `harness.config.json`(root) < env into `{ budget:{ ceiling_usd=20, max_spawns=30 },
+  maxParallel=5, claudeModel='claude-opus-4-8', codexModel='gpt-5.5',
+  codexBillingMode='subscription', priceOverrides? }`. `resolveBudget(config)` feeds
+  `saveBudget`; `getCodexModel`/`getClaudeModel`/`getCodexBillingMode` read fields.
+- `lib/pricing.mjs` — REAL dated price table + `priceFor`, `costUsd` (split in/out),
+  `costUsdFromTotal` (blended), `codexCostUsd(model, totalTokens, billingMode)`
+  (`subscription` → 0 flat, `api` → blended). `codex-cost.mjs` delegates here.
+- `lib/codex-round-runner.mjs` — `defaultLiveCodexRunner({ prompt|promptFile,
+  worktree, model, round })` shells the real Codex CLI (binary
+  `/opt/homebrew/bin/codex`, fallback `codex` on PATH) to edit the worktree; OPT-IN,
+  passed as `runCodexWorker`'s `codexRunner`. Cost is attributed via
+  `pricing.codexCostUsd` using the config's `codexBillingMode`.
 - `lib/ownership.mjs` — `partitionOwnership(tasks)` → `{ ok, violations:[{file,
   owners[]}] }`; `assignOwnership(runDir, tasks)` validates the partition then
   atomically writes `ownership.json` (THROWS + writes nothing on a non-partition);
